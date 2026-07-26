@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "SecurityMonitor (Package)": {
+      "commandName": "MsixPackage"
+    },
+    "SecurityMonitor (Unpackaged)": {
+      "commandName": "Project"
+    }
+  }
+}
