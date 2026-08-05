@@ -1,36 +1,50 @@
 using Microsoft.UI.Xaml;
 using System;
 using System.Collections.ObjectModel;
-using System.Linq;
+using System.Threading.Tasks;
 
 namespace SecurityMonitor
 {
     public sealed partial class MainWindow : Window
     {
-        // Coleção observável que atualizará a interface automaticamente
         public ObservableCollection<SecurityRequirement> RequirementResults { get; } = new ObservableCollection<SecurityRequirement>();
 
         public MainWindow()
         {
             this.InitializeComponent();
-
-            // Define o contexto de dados para que o ListView possa fazer o binding
             RequirementsList.ItemsSource = RequirementResults;
-
-            // Inicia a verificação assim que a janela é carregada
-            CarregarEVerificarTelemetria();
+            RefreshButton.Click += async (_, __) => await CarregarEVerificarTelemetriaAsync();
+            _ = CarregarEVerificarTelemetriaAsync();
         }
 
-        private async void CarregarEVerificarTelemetria()
+        private async Task CarregarEVerificarTelemetriaAsync()
         {
-            // O motor assíncrono varre o sistema
-            var results = await SecurityCheckEngine.CheckAllRequirementsAsync();
-
-            // Limpa os dados de 'placeholder' e preenche com os reais
             RequirementResults.Clear();
-            foreach (var req in results)
+            RequirementResults.Add(new SecurityRequirement
             {
-                RequirementResults.Add(req);
+                Title = "Verificando recursos",
+                Status = SecurityCheckStatus.Unknown,
+                Details = "Aguarde enquanto os dados são consultados no sistema."
+            });
+
+            try
+            {
+                var results = await SecurityCheckEngine.CheckAllRequirementsAsync();
+                RequirementResults.Clear();
+                foreach (var req in results)
+                {
+                    RequirementResults.Add(req);
+                }
+            }
+            catch (Exception ex)
+            {
+                RequirementResults.Clear();
+                RequirementResults.Add(new SecurityRequirement
+                {
+                    Title = "Falha ao verificar",
+                    Status = SecurityCheckStatus.Error,
+                    Details = ex.Message
+                });
             }
         }
     }

@@ -1,89 +1,164 @@
 ﻿using Microsoft.Win32;
 using System;
 using System.Collections.Generic;
-using System.Management;
 using System.Linq;
+using System.Management;
 using System.Threading.Tasks;
 
 namespace SecurityMonitor
 {
-    // Motor para verificar todos os pré-requisitos de segurança.
-    // Falha graciosamente se rodado sem privilégios de administrador.
     public static class SecurityCheckEngine
     {
         public static async Task<List<SecurityRequirement>> CheckAllRequirementsAsync()
         {
             var requirements = new List<SecurityRequirement>();
 
-            requirements.Add(new SecurityRequirement { Title = "Windows 11 25H2 ou posterior", IsMet = CheckOSVersion() });
-            requirements.Add(new SecurityRequirement { Title = "UEFI Secure Boot", IsMet = CheckSecureBoot() });
-            requirements.Add(new SecurityRequirement { Title = "TPM 2.0", IsMet = CheckTpm20() });
+            var osResult = CheckOSVersion();
+            requirements.Add(new SecurityRequirement { Title = "Windows 11 25H2 ou posterior", Status = osResult.Status, Details = osResult.Details });
 
-            var (vbs, hvci) = CheckVbsAndHvci();
-            requirements.Add(new SecurityRequirement { Title = "VBS", IsMet = vbs });
-            requirements.Add(new SecurityRequirement { Title = "HVCI", IsMet = hvci });
+            var secureBootResult = CheckSecureBoot();
+            requirements.Add(new SecurityRequirement { Title = "UEFI Secure Boot", Status = secureBootResult.Status, Details = secureBootResult.Details });
 
-            requirements.Add(new SecurityRequirement { Title = "IOMMU", IsMet = CheckIommu() });
+            var tpmResult = CheckTpm20();
+            requirements.Add(new SecurityRequirement { Title = "TPM 2.0", Status = tpmResult.Status, Details = tpmResult.Details });
 
-            // Simula um delay para testes de interface (remova em produção)
-            await Task.Delay(100);
+            var deviceGuardResult = CheckVbsAndHvci();
+            requirements.Add(new SecurityRequirement
+            {
+                Title = "VBS",
+                Status = deviceGuardResult.Status == SecurityCheckStatus.Error || deviceGuardResult.Status == SecurityCheckStatus.Unknown
+                    ? deviceGuardResult.Status
+                    : (deviceGuardResult.vbs ? SecurityCheckStatus.Active : SecurityCheckStatus.Inactive),
+                Details = deviceGuardResult.Details
+            });
 
+            requirements.Add(new SecurityRequirement
+            {
+                Title = "HVCI",
+                Status = deviceGuardResult.Status == SecurityCheckStatus.Error || deviceGuardResult.Status == SecurityCheckStatus.Unknown
+                    ? deviceGuardResult.Status
+                    : (deviceGuardResult.hvci ? SecurityCheckStatus.Active : SecurityCheckStatus.Inactive),
+                Details = deviceGuardResult.Details
+            });
+
+            var iommuResult = CheckIommu();
+            requirements.Add(new SecurityRequirement { Title = "IOMMU", Status = iommuResult.Status, Details = iommuResult.Details });
+
+            await Task.Yield();
             return requirements;
         }
 
-        private static bool CheckOSVersion()
-        {
-            try { return Environment.OSVersion.Version.Build >= 22621; } // Exemplo: 22621 é Windows 11 22H2
-            catch { return false; }
-        }
-
-        private static bool CheckSecureBoot()
-        {
-            using var key = Registry.LocalMachine.OpenSubKey(@"System\CurrentControlSet\Control\SecureBoot\State");
-            if (key != null)
-            {
-                var val = key.GetValue("UEFISecureBootEnabled");
-                return val != null && (int)val == 1;
-            }
-            return false;
-        }
-
-        private static bool CheckTpm20()
+        private static (SecurityCheckStatus Status, string Details) CheckOSVersion()
         {
             try
             {
-                // Requer Administrador. Falhará silenciosamente e retornará false caso o usuário não seja admin.
-                ManagementScope scope = new ManagementScope(@"\\.\root\CIMV2\Security\MicrosoftTpm");
-                ObjectQuery query = new ObjectQuery("SELECT SpecVersion FROM Win32_Tpm");
-                using ManagementObjectSearcher searcher = new ManagementObjectSearcher(scope, query);
-                foreach (ManagementObject obj in searcher.Get())
-                {
-                    string version = obj["SpecVersion"]?.ToString();
-                    if (!string.IsNullOrEmpty(version) && version.StartsWith("2.0")) return true;
-                }
+                var build = Environment.OSVersion.Version.Build;
+                return build >= 22621
+                    ? (SecurityCheckStatus.Active, $"Build {build} detectada no sistema atual.")
+                    : (SecurityCheckStatus.Inactive, $"Build {build} detectada; o requisito Windows 11 25H2+ não foi atendido.");
             }
-            catch { }
-            return false;
+            catch (Exception ex)
+            {
+                return (SecurityCheckStatus.Error, $"Não foi possível determinar a versão do SO: {ex.Message}");
+            }
         }
 
-        private static (bool vbs, bool hvci) CheckVbsAndHvci()
+        private static (SecurityCheckStatus Status, string Details) CheckSecureBoot()
         {
-            bool vbs = false, hvci = false;
             try
             {
-                using ManagementObjectSearcher searcher = new ManagementObjectSearcher(@"root\CIMV2", "SELECT VirtualizationBasedSecurityStatus, SecurityServicesRunning FROM Win32_DeviceGuard");
-                foreach (ManagementObject obj in searcher.Get())
+                using var key = Registry.LocalMachine.OpenSubKey(@"System\CurrentControlSet\Control\SecureBoot\State");
+                if (key != null)
                 {
-                    vbs = Convert.ToInt32(obj["VirtualizationBasedSecurityStatus"]) == 2;
-                    int[] services = obj["SecurityServicesRunning"] as int[];
-                    if (services != null && services.Contains(1)) hvci = true; // 1 = HVCI
+                    var val = key.GetValue("UEFISecureBootEnabled");
+                    if (val is int enabled)
+                    {
+                        return enabled == 1
+                            ? (SecurityCheckStatus.Active, "Secure Boot está habilitado.")
+                            : (SecurityCheckStatus.Inactive, "Secure Boot está desabilitado.");
+                    }
                 }
+
+                return (SecurityCheckStatus.Unknown, "Não foi possível localizar o estado do Secure Boot.");
             }
-            catch { }
-            return (vbs, hvci);
+            catch (Exception ex)
+            {
+                return (SecurityCheckStatus.Error, $"Erro ao consultar Secure Boot: {ex.Message}");
+            }
         }
 
-        private static bool CheckIommu()
+        private static (SecurityCheckStatus Status, string Details) CheckTpm20()
+        {
+            try
+            {
+                var scope = new ManagementScope(@"\\.\root\CIMV2\Security\MicrosoftTpm");
+                var query = new ObjectQuery("SELECT SpecVersion FROM Win32_Tpm");
+                using var searcher = new ManagementObjectSearcher(scope, query);
+                foreach (var obj in searcher.Get())
+                {
+                    var version = obj["SpecVersion"]?.ToString();
+                    if (!string.IsNullOrEmpty(version) && version.StartsWith("2.0"))
+                    {
+                        return (SecurityCheckStatus.Active, $"TPM encontrado com versão {version}.");
+                    }
+
+                    if (!string.IsNullOrEmpty(version))
+                    {
+                        return (SecurityCheckStatus.Inactive, $"TPM encontrado, mas a versão {version} não atende ao requisito.");
+                    }
+                }
+
+                return (SecurityCheckStatus.Unknown, "TPM não foi encontrado ou não está disponível nesta sessão.");
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return (SecurityCheckStatus.Error, $"Acesso negado ao TPM. Execute como administrador. {ex.Message}");
+            }
+            catch (ManagementException ex)
+            {
+                return (SecurityCheckStatus.Error, $"Erro WMI ao consultar TPM: {ex.Message}");
+            }
+            catch (Exception ex)
+            {
+                return (SecurityCheckStatus.Error, $"Erro ao consultar TPM: {ex.Message}");
+            }
+        }
+
+        private static (SecurityCheckStatus Status, string Details, bool vbs, bool hvci) CheckVbsAndHvci()
+        {
+            try
+            {
+                using var searcher = new ManagementObjectSearcher(@"root\CIMV2", "SELECT VirtualizationBasedSecurityStatus, SecurityServicesRunning FROM Win32_DeviceGuard");
+                foreach (var obj in searcher.Get())
+                {
+                    var vbsStatus = Convert.ToInt32(obj["VirtualizationBasedSecurityStatus"]);
+                    var services = obj["SecurityServicesRunning"] as int[];
+                    var vbs = vbsStatus == 2;
+                    var hvci = services != null && services.Contains(1);
+
+                    return (vbs ? SecurityCheckStatus.Active : SecurityCheckStatus.Inactive,
+                        $"VBS {(vbs ? "ativo" : "inativo")} e HVCI {(hvci ? "ativo" : "inativo")}",
+                        vbs,
+                        hvci);
+                }
+
+                return (SecurityCheckStatus.Unknown, "Não foi possível localizar dados do Device Guard.", false, false);
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return (SecurityCheckStatus.Error, $"Acesso negado ao consultar VBS/HVCI: {ex.Message}", false, false);
+            }
+            catch (ManagementException ex)
+            {
+                return (SecurityCheckStatus.Error, $"Erro WMI ao consultar VBS/HVCI: {ex.Message}", false, false);
+            }
+            catch (Exception ex)
+            {
+                return (SecurityCheckStatus.Error, $"Erro ao consultar VBS/HVCI: {ex.Message}", false, false);
+            }
+        }
+
+        private static (SecurityCheckStatus Status, string Details) CheckIommu()
         {
             try
             {
@@ -91,11 +166,20 @@ namespace SecurityMonitor
                 if (key != null)
                 {
                     var val = key.GetValue("KernelDmaProtection");
-                    return val != null && (int)val == 1;
+                    if (val is int enabled)
+                    {
+                        return enabled == 1
+                            ? (SecurityCheckStatus.Active, "Proteção DMA está habilitada.")
+                            : (SecurityCheckStatus.Inactive, "Proteção DMA está desabilitada.");
+                    }
                 }
+
+                return (SecurityCheckStatus.Unknown, "Não foi possível localizar o estado de IOMMU.");
             }
-            catch { }
-            return false;
+            catch (Exception ex)
+            {
+                return (SecurityCheckStatus.Error, $"Erro ao consultar IOMMU: {ex.Message}");
+            }
         }
     }
 }

@@ -14,18 +14,27 @@
                 <Setter Property="Background" Value="#1E1E1E"/>
                 <Setter Property="CornerRadius" Value="8"/>
                 <Setter Property="Margin" Value="0,4"/>
-                <Setter Property="Padding" Value="10,0"/>
-                <Setter Property="Height" Value="55"/>
+                <Setter Property="Padding" Value="10,10"/>
+                <Setter Property="MinHeight" Value="70"/>
             </Style>
         </Grid.Resources>
 
         <StackPanel Spacing="15">
-            <TextBlock Text="RECURSOS DE SEGURANÇA RECOMENDADOS" 
-                       Foreground="#888888" 
-                       FontWeight="SemiBold"
-                       FontSize="12"
-                       Margin="0,0,0,10"
-                       CharacterSpacing="25"/>
+            <Grid ColumnDefinitions="*,Auto">
+                <TextBlock Text="RECURSOS DE SEGURANÇA RECOMENDADOS" 
+                           Foreground="#888888" 
+                           FontWeight="SemiBold"
+                           FontSize="12"
+                           CharacterSpacing="25"
+                           VerticalAlignment="Center"/>
+
+                <Button x:Name="RefreshButton"
+                        Grid.Column="1"
+                        Content="Verificar novamente"
+                        Background="#00BCD4"
+                        Foreground="White"
+                        Padding="12,6"/>
+            </Grid>
 
             <ListView x:Name="RequirementsList" SelectionMode="None">
                 <ListView.ItemTemplate>
@@ -41,15 +50,22 @@
                                            HorizontalAlignment="Left"
                                            RadiusX="1.5" RadiusY="1.5"/>
 
-                                <TextBlock Grid.Column="1" 
-                                           Text="{x:Bind Title}" 
-                                           Foreground="White"
-                                           FontSize="15" 
-                                           FontWeight="SemiBold"
-                                           VerticalAlignment="Center"
-                                           Margin="20,0,0,0"/>
+                                <StackPanel Grid.Column="1" Margin="20,0,0,0" VerticalAlignment="Center">
+                                    <TextBlock Text="{x:Bind Title}" 
+                                               Foreground="White"
+                                               FontSize="15" 
+                                               FontWeight="SemiBold"/>
+                                    <TextBlock Text="{x:Bind StatusText, Mode=OneWay}" 
+                                               Foreground="#A8A8A8"
+                                               FontSize="12"
+                                               Margin="0,2,0,0"/>
+                                    <TextBlock Text="{x:Bind Details, Mode=OneWay}" 
+                                               Foreground="#7A7A7A"
+                                               FontSize="11"
+                                               TextWrapping="WrapWholeWords"
+                                               Margin="0,2,0,0"/>
+                                </StackPanel>
 
-                                <!-- CORREÇÃO: O Texto e a Cor agora são dinâmicos (OneWay) -->
                                 <TextBlock Grid.Column="2" 
                                            Text="{x:Bind IconGlyph, Mode=OneWay}" 
                                            Foreground="{x:Bind IconBrush, Mode=OneWay}"
